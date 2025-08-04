@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excalibur Con Interactive Floor Map</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css">
+    <style>
+        .room-hotspot {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .room-hotspot:hover {
+            fill: #60a5fa;
+            stroke: #2563eb;
+            stroke-width: 2;
+        }
+        .active-filter {
+            background-color: #2563eb;
+            color: white;
+        }
+        .inactive-filter {
+            background-color: #f3f4f6;
+            color: #374151;
+        }
+        .favorite-btn {
+            transition: all 0.2s ease;
+        }
+        .favorite-btn:hover {
+            transform: scale(1.1);
+        }
+        .event-card {
+            transition: transform 0.2s ease;
+        }
+        .event-card:hover {
+            transform: translateY(-2px);
+        }
+        .csv-instructions {
+            font-family: 'Courier New', monospace;
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 12px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="app"></div>
+
+    <script>
+        // Global state management
+        let appState = {
+            currentView: 'map',
+            currentFloor: 'ground',
+            selectedRoom: null,
+            activeFilters: [],
+            searchQuery: '',
+            sortBy: 'time',
+            favorites: JSON.parse(localStorage.getItem('excalibur_favs_v1') || '[]'),
+            isAdmin: false,
+            events: [
+                {
+                    id: 1,
+                    title: "Welcome to Excalibur Con",
+                    description: "Opening ceremony and welcome presentation",
+                    speaker: "Convention Staff",
+                    room: "edmund-fitzgerald",
+                    date: "2024-07-20",
+                    startTime: "09:00",
+                    endTime: "10:00",
+                    tags: ["ceremony", "welcome"]
+                },
+                {
+                    id: 2,
+                    title: "Dungeons & Dragons 5e Workshop",
+                    description: "Learn the basics of D&D 5th edition",
+                    speaker: "Mike Johnson",
+                    room: "gooseberry-1",
+                    date: "2024-07-20",
+                    startTime: "10:30",
+                    endTime: "12:00",
+                    tags: ["workshop", "dnd", "gaming"]
+                },
+                {
+                    id: 3,
+                    title: "Cosplay Contest",
+                    description: "Show off your best costume creations",
+                    speaker: "Sarah Chen",
+                    room: "lake-superior",
+                    date: "2024-07-20",
+                    startTime: "14:00",
+                    endTime: "16:00",
+                    tags: ["cosplay", "contest", "entertainment"]
+                },
+                {
+                    id: 4,
+                    title: "Indie Game Showcase",
+                    description: "Discover amazing new indie games",
+                    speaker: "GameDev Collective",
+                    room: "french-river",
+                    date: "2024-07-20",
+                    startTime: "16:30",
+                    endTime: "18:00",
+                    tags: ["gaming", "indie", "showcase"]
+                },
+                {
+                    id: 5,
+                    title: "Voice Acting Panel",
+                    description: "Meet professional voice actors",
+                    speaker: "Voice Actor Guild",
+                    room: "st-louis-river",
+                    date: "2024-07-21",
+                    startTime: "11:00",
+                    endTime: "12:30",
+                    tags: ["panel", "voice-acting", "entertainment"]
+                }
+            ]
+        };
+
+        // Room definitions
+        const rooms = {
+            'edmund-fitzgerald': { name: 'Edmund Fitzgerald Exhibit Hall', floor: 'ground' },
+            'gooseberry-1': { name: 'Gooseberry Falls Room 1', floor: 'ground' },
+            'gooseberry-2': { name: 'Gooseberry Falls Room 2', floor: 'ground' },
+            'gooseberry-3': { name: 'Gooseberry Falls Room 3', floor: 'ground' },
+            'split-rock': { name: 'Split Rock Room', floor: 'ground' },
+            'lake-superior': { name: 'Lake Superior Ballroom', floor: 'skywalk' },
+            'french-river': { name: 'French River Room', floor: 'skywalk' },
+            'st-louis-river': { name: 'St. Louis River Room', floor: 'skywalk' },
+            'board-room': { name: 'Board Room', floor: 'skywalk' }
+        };
+
+        // Utility functions
+        function saveFavorites() {
+            localStorage.setItem('excalibur_favs_v1', JSON.stringify(appState.favorites));
+        }
+
+        function toggleFavorite(eventId) {
+            const index = appState.favorites.indexOf(eventId);
+            if (index === -1) {
+                appState.favorites.push(eventId);
+            } else {
+                appState.favorites.splice(index, 1);
+            }
+            saveFavorites();
+            render();
+        }
+
+        function getAllTags() {
+            const tags = new Set();
+            appState.events.forEach(event => {
+                event.tags.forEach(tag => tags.add(tag));
+            });
+            return Array.from(tags).sort();
+        }
+
+        function getFilteredEvents() {
+            let filtered = appState.events;
+
+            // Filter by search query
+            if (appState.searchQuery) {
+                const query = appState.searchQuery.toLowerCase();
+                filtered = filtered.filter(event => 
+                    event.title.toLowerCase().includes(query) ||
+                    event.description.toLowerCase().includes(query) ||
+                    event.speaker.toLowerCase().includes(query) ||
+                    rooms[event.room]?.name.toLowerCase().includes(query)
+                );
+            }
+
+            // Filter by active tags
+            if (appState.activeFilters.length > 0) {
+                filtered = filtered.filter(event => 
+                    appState.activeFilters.every(filter => event.tags.includes(filter))
+                );
+            }
+
+            // Sort events
+            filtered.sort((a, b) => {
+                switch (appState.sortBy) {
+                    case 'time':
+                        return new Date(`${a.date} ${a.startTime}`) - new Date(`${b.date} ${b.startTime}`);
+                    case 'title':
+                        return a.title.localeCompare(b.title);
+                    case 'room':
+                        return rooms[a.room]?.name.localeCompare(rooms[b.room]?.name) || 0;
+                    default:
+                        return 0;
+                }
+            });
+
+            return filtered;
+        }
+
+        function getRoomEvents(roomId) {
+            return appState.events.filter(event => event.room === roomId);
+        }
+
+        // Component functions
+        function Header() {
+            return `
+                <header class="bg-white shadow-sm border-b">
+                    <div class="max-w-7xl mx-auto px-4 py-4">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center space-x-4">
+                                <div class="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center">
+                                    <i class="fas fa-sword text-white text-xl"></i>
+                                </div>
+                                <div>
+                                    <h1 class="text-2xl font-bold text-gray-900">Excalibur Con</h1>
+                                    <p class="text-sm text-gray-600">Interactive Floor Map</p>
+                                </div>
+                            </div>
+                            <nav class="flex space-x-4">
+                                <button onclick="setView('map')" class="px-4 py-2 rounded-md ${appState.currentView === 'map' ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-gray-100'}">
+                                    Map
+                                </button>
+                                <button onclick="setView('schedule')" class="px-4 py-2 rounded-md ${appState.currentView === 'schedule' ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-gray-100'}">
+                                    Schedule
+                                </button>
+                                <button onclick="setView('favorites')" class="px-4 py-2 rounded-md ${appState.currentView === 'favorites' ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-gray-100'}">
+                                    Favorites (${appState.favorites.length})
+                                </button>
+                                <button onclick="setView('admin')" class="px-4 py-2 rounded-md ${appState.currentView === 'admin' ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-gray-100'}">
+                                    Admin
+                                </button>
+                            </nav>
+                        </div>
+                    </div>
+                </header>
+            `;
+        }
+
+        function FloorMap() {
+            const groundFloorSVG = `
+                <svg viewBox="0 0 800 600" class="w-full h-full">
+                    <defs>
+                        <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                            <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e5e7eb" stroke-width="1"/>
+                        </pattern>
+                    </defs>
+                    <rect width="800" height="600" fill="url(#grid)"/>
+                    
+                    <!-- Edmund Fitzgerald Exhibit Hall -->
+                    <rect id="edmund-fitzgerald" x="50" y="50" width="300" height="200" fill="#e0f2fe" stroke="#0891b2" stroke-width="2" class="room-hotspot" onclick="selectRoom('edmund-fitzgerald')"/>
+                    <text x="200" y="140" text-anchor="middle" class="text-sm font-medium pointer-events-none">Edmund Fitzgerald</text>
+                    <text x="200" y="155" text-anchor="middle" class="text-sm font-medium pointer-events-none">Exhibit Hall</text>
+                    
+                    <!-- Gooseberry Falls Rooms -->
+                    <rect id="gooseberry-1" x="400" y="50" width="100" height="80" fill="#e0f2fe" stroke="#0891b2" stroke-width="2" class="room-hotspot" onclick="selectRoom('gooseberry-1')"/>
+                    <text x="450" y="85" text-anchor="middle" class="text-xs font-medium pointer-events-none">Gooseberry</text>
+                    <text x="450" y="100" text-anchor="middle" class="text-xs font-medium pointer-events-none">Falls 1</text>
+                    
+                    <rect id="gooseberry-2" x="400" y="140" width="100" height="80" fill="#e0f2fe" stroke="#0891b2" stroke-width="2" class="room-hotspot" onclick="selectRoom('gooseberry-2')"/>
+                    <text x="450" y="175" text-anchor="middle" class="text-xs font-medium pointer-events-none">Gooseberry</text>
+                    <text x="450" y="190" text-anchor="middle" class="text-xs font-medium pointer-events-none">Falls 2</text>
+                    
+                    <rect id="gooseberry-3" x="400" y="230" width="100" height="80" fill="#e0f2fe" stroke="#0891b2" stroke-width="2" class="room-hotspot" onclick="selectRoom('gooseberry-3')"/>
+                    <text x="450" y="265" text-anchor="middle" class="text-xs font-medium pointer-events-none">Gooseberry</text>
+                    <text x="450" y="280" text-anchor="middle" class="text-xs font-medium pointer-events-none">Falls 3</text>
+                    
+                    <!-- Split Rock Room -->
+                    <rect id="split-rock" x="50" y="300" width="150" height="100" fill="#e0f2fe" stroke="#0891b2" stroke-width="2" class="room-hotspot" onclick="selectRoom('split-rock')"/>
+                    <text x="125" y="345" text-anchor="middle" class="text-sm font-medium pointer-events-none">Split Rock</text>
+                    <text x="125" y="360" text-anchor="middle" class="text-sm font-medium pointer-events-none">Room</text>
+                    
+                    <!-- Lobby -->
+                    <ellipse cx="600" cy="400" rx="100" ry="80" fill="#f3f4f6" stroke="#6b7280" stroke-width="2"/>
+                    <text x="600" y="400" text-anchor="middle" class="text-sm font-medium pointer-events-none">Lobby</text>
+                    
+                    <!-- Registration Area -->
+                    <rect x="250" y="350" width="120" height="80" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+                    <text x="310" y="385" text-anchor="middle" class="text-sm font-medium pointer-events-none">Registration</text>
+                    <text x="310" y="400" text-anchor="middle" class="text-sm font-medium pointer-events-none">Area</text>
+                </svg>
+            `;
+
+            const skywalkFloorSVG = `
+                <svg viewBox="0 0 800 600" class="w-full h-full">
+                    <defs>
+                        <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                            <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e5e7eb" stroke-width="1"/>
+                        </pattern>
+                    </defs>
+                    <rect width="800" height="600" fill="url(#grid)"/>
+                    
+                    <!-- Lake Superior Ballroom -->
+                    <rect id="lake-superior" x="50" y="50" width="250" height="300" fill="#e0f2fe" stroke="#0891b2" stroke-width="2" class="room-hotspot" onclick="selectRoom('lake-superior')"/>
+                    <text x="175" y="190" text-anchor="middle" class="text-lg font-medium pointer-events-none">Lake Superior</text>
+                    <text x="175" y="210" text-anchor="middle" class="text-lg font-medium pointer-events-none">Ballroom</text>
+                    
+                    <!-- French River Room -->
+                    <rect id="french-river" x="350" y="50" width="150" height="100" fill="#e0f2fe" stroke="#0891b2" stroke-width="2" class="room-hotspot" onclick="selectRoom('french-river')"/>
+                    <text x="425" y="95" text-anchor="middle" class="text-sm font-medium pointer-events-none">French River</text>
+                    <text x="425" y="110" text-anchor="middle" class="text-sm font-medium pointer-events-none">Room</text>
+                    
+                    <!-- St. Louis River Room -->
+                    <rect id="st-louis-river" x="550" y="200" width="150" height="150" fill="#e0f2fe" stroke="#0891b2" stroke-width="2" class="room-hotspot" onclick="selectRoom('st-louis-river')"/>
+                    <text x="625" y="270" text-anchor="middle" class="text-sm font-medium pointer-events-none">St. Louis River</text>
+                    <text x="625" y="285" text-anchor="middle" class="text-sm font-medium pointer-events-none">Room</text>
+                    
+                    <!-- Board Room -->
+                    <rect id="board-room" x="350" y="200" width="120" height="80" fill="#e0f2fe" stroke="#0891b2" stroke-width="2" class="room-hotspot" onclick="selectRoom('board-room')"/>
+                    <text x="410" y="235" text-anchor="middle" class="text-sm font-medium pointer-events-none">Board</text>
+                    <text x="410" y="250" text-anchor="middle" class="text-sm font-medium pointer-events-none">Room</text>
+                    
+                    <!-- Food Service -->
+                    <rect x="50" y="400" width="200" height="80" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+                    <text x="150" y="440" text-anchor="middle" class="text-sm font-medium pointer-events-none">Food Service</text>
+                    
+                    <!-- Skywalk Connection -->
+                    <rect x="550" y="50" width="200" height="50" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+                    <text x="650" y="75" text-anchor="middle" class="text-sm font-medium pointer-events-none">Skywalk to Downtown</text>
+                </svg>
+            `;
+
+            return `
+                <div class="bg-white rounded-lg shadow-sm p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-semibold">Convention Floor Plan</h2>
+                        <div class="flex space-x-2">
+                            <button onclick="setFloor('ground')" class="px-4 py-2 rounded-md ${appState.currentFloor === 'ground' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}">
+                                Ground Level
+                            </button>
+                            <button onclick="setFloor('skywalk')" class="px-4 py-2 rounded-md ${appState.currentFloor === 'skywalk' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}">
+                                Skywalk Level
+                            </button>
+                        </div>
+                    </div>
+                    <div class="border rounded-lg overflow-hidden" style="height: 400px;">
+                        ${appState.currentFloor === 'ground' ? groundFloorSVG : skywalkFloorSVG}
+                    </div>
+                </div>
+            `;
+        }
+
+        function EventCard(event) {
+            const isFavorite = appState.favorites.includes(event.id);
+            const roomName = rooms[event.room]?.name || 'Unknown Room';
+            
+            return `
+                <div class="bg-white rounded-lg shadow-sm border p-4 event-card">
+                    <div class="flex items-start justify-between">
+                        <div class="flex-1">
+                            <h3 class="font-semibold text-lg text-gray-900">${event.title}</h3>
+                            <p class="text-sm text-gray-600 mt-1">${event.description}</p>
+                            <div class="mt-3 space-y-1">
+                                <div class="flex items-center text-sm text-gray-500">
+                                    <i class="fas fa-clock mr-2"></i>
+                                    ${event.date} | ${event.startTime} - ${event.endTime}
+                                </div>
+                                <div class="flex items-center text-sm text-gray-500">
+                                    <i class="fas fa-map-marker-alt mr-2"></i>
+                                    ${roomName}
+                                </div>
+                                <div class="flex items-center text-sm text-gray-500">
+                                    <i class="fas fa-user mr-2"></i>
+                                    ${event.speaker}
+                                </div>
+                            </div>
+                            <div class="mt-3 flex flex-wrap gap-1">
+                                ${event.tags.map(tag => `<span class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">${tag}</span>`).join('')}
+                            </div>
+                        </div>
+                        <button onclick="toggleFavorite(${event.id})" class="favorite-btn ml-4 p-2 rounded-full hover:bg-gray-100">
+                            <i class="fas fa-star ${isFavorite ? 'text-yellow-500' : 'text-gray-300'}"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function EventListView() {
+            const filteredEvents = getFilteredEvents();
+            const allTags = getAllTags();
+            
+            return `
+                <div class="space-y-6">
+                    <!-- Search and Sort Controls -->
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <div class="flex flex-col lg:flex-row gap-4 items-center">
+                            <div class="flex-1">
+                                <input type="text" 
+                                       placeholder="Search events, speakers, or descriptions..." 
+                                       class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                       value="${appState.searchQuery}"
+                                       onkeyup="updateSearch(this.value)">
+                            </div>
+                            <div class="flex items-center space-x-4">
+                                <label class="text-sm font-medium text-gray-700">Sort by:</label>
+                                <select onchange="setSortBy(this.value)" class="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                    <option value="time" ${appState.sortBy === 'time' ? 'selected' : ''}>Time</option>
+                                    <option value="title" ${appState.sortBy === 'title' ? 'selected' : ''}>Title</option>
+                                    <option value="room" ${appState.sortBy === 'room' ? 'selected' : ''}>Room</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tag Filters -->
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-semibold">Filter by Tags</h3>
+                            <button onclick="clearFilters()" class="text-sm text-blue-600 hover:text-blue-800">Clear All</button>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            ${allTags.map(tag => `
+                                <button onclick="toggleFilter('${tag}')" 
+                                        class="px-3 py-1 rounded-full text-sm font-medium border transition-colors
+                                               ${appState.activeFilters.includes(tag) ? 'active-filter' : 'inactive-filter hover:bg-gray-100'}">
+                                    ${tag}
+                                </button>
+                            `).join('')}
+                        </div>
+                        ${appState.activeFilters.length > 0 ? `
+                            <div class="mt-3 text-sm text-gray-600">
+                                Active filters: ${appState.activeFilters.join(', ')} 
+                                (${filteredEvents.length} events found)
+                            </div>
+                        ` : ''}
+                    </div>
+
+                    <!-- Events List -->
+                    <div class="space-y-4">
+                        ${filteredEvents.length === 0 ? 
+                            '<div class="text-center py-8 text-gray-500">No events found matching your criteria.</div>' :
+                            filteredEvents.map(event => EventCard(event)).join('')
+                        }
+                    </div>
+                </div>
+            `;
+        }
+
+        function RoomModal(roomId) {
+            const room = rooms[roomId];
+            const roomEvents = getRoomEvents(roomId);
+            
+            return `
+                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50" onclick="closeModal(event)">
+                    <div class="bg-white rounded-lg max-w-2xl w-full max-h-screen overflow-y-auto" onclick="event.stopPropagation()">
+                        <div class="p-6">
+                            <div class="flex items-center justify-between mb-4">
+                                <h2 class="text-2xl font-bold">${room.name}</h2>
+                                <button onclick="closeModal()" class="text-gray-500 hover:text-gray-700">
+                                    <i class="fas fa-times text-xl"></i>
+                                </button>
+                            </div>
+                            
+                            ${roomEvents.length === 0 ? 
+                                '<p class="text-gray-500 text-center py-8">No events scheduled for this room.</p>' :
+                                `<div class="space-y-4">
+                                    ${roomEvents.map(event => EventCard(event)).join('')}
+                                </div>`
+                            }
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function AdminPanel() {
+            if (!appState.isAdmin) {
+                return `
+                    <div class="max-w-md mx-auto mt-8 bg-white rounded-lg shadow-sm p-6">
+                        <h2 class="text-xl font-semibold mb-4">Admin Login</h2>
+                        <form onsubmit="adminLogin(event)">
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Password</label>
+                                <input type="password" id="adminPassword" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" required>
+                            </div>
+                            <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">
+                                Login
+                            </button>
+                        </form>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="space-y-6">
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-xl font-semibold">Admin Panel</h2>
+                            <button onclick="adminLogout()" class="text-red-600 hover:text-red-800">
+                                <i class="fas fa-sign-out-alt mr-2"></i>Logout
+                            </button>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                            <button onclick="showAddEventForm()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">
+                                <i class="fas fa-plus mr-2"></i>Add New Event
+                            </button>
+                            <button onclick="showCSVImport()" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700">
+                                <i class="fas fa-file-upload mr-2"></i>Import CSV
+                            </button>
+                        </div>
+                        
+                        <!-- CSV Import Section -->
+                        <div id="csvImportSection" class="mb-6 p-4 border rounded-lg bg-gray-50" style="display: none;">
+                            <h3 class="text-lg font-semibold mb-3">CSV Import</h3>
+                            <div class="csv-instructions mb-4">
+                                <strong>CSV Format Instructions:</strong><br>
+                                Your CSV file should have the following columns (in this exact order):<br><br>
+                                title,description,speaker,room,date,startTime,endTime,tags<br><br>
+                                <strong>Example:</strong><br>
+                                "D&D Workshop","Learn basic D&D rules","John Smith","gooseberry-1","2024-07-20","10:00","12:00","workshop,gaming"<br><br>
+                                <strong>Room IDs:</strong> ${Object.keys(rooms).join(', ')}<br>
+                                <strong>Date Format:</strong> YYYY-MM-DD<br>
+                                <strong>Time Format:</strong> HH:MM (24-hour)<br>
+                                <strong>Tags:</strong> Comma-separated within quotes
+                            </div>
+                            <input type="file" id="csvFile" accept=".csv" class="mb-3">
+                            <div class="flex space-x-2">
+                                <button onclick="importCSV()" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Import Events</button>
+                                <button onclick="hideCSVImport()" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700">Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Events Management -->
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <h3 class="text-lg font-semibold mb-4">Manage Events</h3>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-4 py-2 text-left">Title</th>
+                                        <th class="px-4 py-2 text-left">Room</th>
+                                        <th class="px-4 py-2 text-left">Date/Time</th>
+                                        <th class="px-4 py-2 text-left">Speaker</th>
+                                        <th class="px-4 py-2 text-left">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${appState.events.map(event => `
+                                        <tr class="border-t">
+                                            <td class="px-4 py-2">${event.title}</td>
+                                            <td class="px-4 py-2">${rooms[event.room]?.name || 'Unknown'}</td>
+                                            <td class="px-4 py-2">${event.date}<br>${event.startTime}-${event.endTime}</td>
+                                            <td class="px-4 py-2">${event.speaker}</td>
+                                            <td class="px-4 py-2">
+                                                <button onclick="editEvent(${event.id})" class="text-blue-600 hover:text-blue-800 mr-2">
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                                <button onclick="deleteEvent(${event.id})" class="text-red-600 hover:text-red-800">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function FavoritesView() {
+            const favoriteEvents = appState.events.filter(event => appState.favorites.includes(event.id));
+            
+            return `
+                <div class="space-y-6">
+                    <div class="bg-white rounded-lg shadow-sm p-6">
+                        <h2 class="text-xl font-semibold mb-4">Your Favorite Events</h2>
+                        ${favoriteEvents.length === 0 ? 
+                            '<p class="text-gray-500 text-center py-8">You haven\'t favorited any events yet. Star events to add them to your favorites!</p>' :
+                            `<div class="space-y-4">
+                                ${favoriteEvents.map(event => EventCard(event)).join('')}
+                            </div>`
+                        }
+                    </div>
+                </div>
+            `;
+        }
+
+        // Event handlers
+        function setView(view) {
+            appState.currentView = view;
+            render();
+        }
+
+        function setFloor(floor) {
+            appState.currentFloor = floor;
+            render();
+        }
+
+        function selectRoom(roomId) {
+            appState.selectedRoom = roomId;
+            render();
+        }
+
+        function closeModal(event) {
+            if (event && event.target !== event.currentTarget) return;
+            appState.selectedRoom = null;
+            render();
+        }
+
+        function toggleFilter(tag) {
+            const index = appState.activeFilters.indexOf(tag);
+            if (index === -1) {
+                appState.activeFilters.push(tag);
+            } else {
+                appState.activeFilters.splice(index, 1);
+            }
+            render();
+        }
+
+        function clearFilters() {
+            appState.activeFilters = [];
+            render();
+        }
+
+        function updateSearch(query) {
+            appState.searchQuery = query;
+            render();
+        }
+
+        function setSortBy(sortBy) {
+            appState.sortBy = sortBy;
+            render();
+        }
+
+        function adminLogin(event) {
+            event.preventDefault();
+            const password = document.getElementById('adminPassword').value;
+            if (password === 'excalibur2024') {
+                appState.isAdmin = true;
+                render();
+            } else {
+                alert('Invalid password');
+            }
+        }
+
+        function adminLogout() {
+            appState.isAdmin = false;
+            render();
+        }
+
+        function showAddEventForm() {
+            // Implementation for add event form
+            alert('Add event form would be implemented here');
+        }
+
+        function showCSVImport() {
+            document.getElementById('csvImportSection').style.display = 'block';
+        }
+
+        function hideCSVImport() {
+            document.getElementById('csvImportSection').style.display = 'none';
+        }
+
+        function importCSV() {
+            const fileInput = document.getElementById('csvFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select a CSV file');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const csv = e.target.result;
+                const lines = csv.split('\n');
+                const header = lines[0].split(',');
+                
+                // Expected header: title,description,speaker,room,date,startTime,endTime,tags
+                const expectedHeader = ['title', 'description', 'speaker', 'room', 'date', 'startTime', 'endTime', 'tags'];
+                
+                const cleanHeader = header.map(h => h.trim().replace(/"/g, ''));
+                
+                if (JSON.stringify(cleanHeader) !== JSON.stringify(expectedHeader)) {
+                    alert('CSV header format is incorrect. Please check the instructions.');
+                    return;
+                }
+
+                const newEvents = [];
+                for (let i = 1; i < lines.length; i++) {
+                    const line = lines[i].trim();
+                    if (line) {
+                        const values = parseCSVLine(line);
+                        if (values.length === 8) {
+                            const event = {
+                                id: Date.now() + i,
+                                title: values[0],
+                                description: values[1],
+                                speaker: values[2],
+                                room: values[3],
+                                date: values[4],
+                                startTime: values[5],
+                                endTime: values[6],
+                                tags: values[7].split(',').map(t => t.trim())
+                            };
+                            newEvents.push(event);
+                        }
+                    }
+                }
+
+                appState.events = appState.events.concat(newEvents);
+                alert(`Successfully imported ${newEvents.length} events`);
+                hideCSVImport();
+                render();
+            };
+            reader.readAsText(file);
+        }
+
+        function parseCSVLine(line) {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+            
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                
+                if (char === '"' && (i === 0 || line[i-1] === ',')) {
+                    inQuotes = true;
+                } else if (char === '"' && inQuotes && (i === line.length - 1 || line[i+1] === ',')) {
+                    inQuotes = false;
+                } else if (char === ',' && !inQuotes) {
+                    result.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            
+            result.push(current.trim());
+            return result;
+        }
+
+        function editEvent(eventId) {
+            alert(`Edit event ${eventId} - form would be implemented here`);
+        }
+
+        function deleteEvent(eventId) {
+            if (confirm('Are you sure you want to delete this event?')) {
+                appState.events = appState.events.filter(event => event.id !== eventId);
+                render();
+            }
+        }
+
+        // Keyboard event handlers
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && appState.selectedRoom) {
+                closeModal();
+            }
+        });
+
+        // Main render function
+        function render() {
+            const app = document.getElementById('app');
+            
+            let content = '';
+            
+            switch (appState.currentView) {
+                case 'map':
+                    content = `
+                        ${Header()}
+                        <main class="max-w-7xl mx-auto px-4 py-8">
+                            ${FloorMap()}
+                            <div class="mt-8">
+                                ${EventListView()}
+                            </div>
+                        </main>
+                    `;
+                    break;
+                case 'schedule':
+                    content = `
+                        ${Header()}
+                        <main class="max-w-7xl mx-auto px-4 py-8">
+                            ${EventListView()}
+                        </main>
+                    `;
+                    break;
+                case 'favorites':
+                    content = `
+                        ${Header()}
+                        <main class="max-w-7xl mx-auto px-4 py-8">
+                            ${FavoritesView()}
+                        </main>
+                    `;
+                    break;
+                case 'admin':
+                    content = `
+                        ${Header()}
+                        <main class="max-w-7xl mx-auto px-4 py-8">
+                            ${AdminPanel()}
+                        </main>
+                    `;
+                    break;
+            }
+            
+            if (appState.selectedRoom) {
+                content += RoomModal(appState.selectedRoom);
+            }
+            
+            app.innerHTML = content;
+        }
+
+        // Initialize the app
+        render();
+    </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/vcd15cbe7772f49c399c6a5babf22c1241717689176015" integrity="sha512-ZpsOmlRQV6y907TI0dKBHq9Md29nnaEIPlkf84rnaERnq6zvWvPUqr2ft8M1aS28oN72PdrCzSjY4U6VaAw1EQ==" data-cf-beacon='{"rayId":"96922bd44dfe4c9e","serverTiming":{"name":{"cfExtPri":true,"cfEdge":true,"cfOrigin":true,"cfL4":true,"cfSpeedBrain":true,"cfCacheStatus":true}},"version":"2025.7.0","token":"4edd5f8ec12a48cfa682ab8261b80a79"}' crossorigin="anonymous"></script>
+</body>
+</html>
+    <script id="html_badge_script1">
+        window.__genspark_remove_badge_link = "https://www.genspark.ai/api/html_badge/" +
+            "remove_badge?token=To%2FBnjzloZ3UfQdcSaYfDmImgIfwiUiR4J2%2FMV5IkZnB4r93Ny8SYHqB%2BqXuLhTh6j01g176QHWxSbEC1WKM3lk7kNRLGzvQx5bdHLmcBrAwYJNs5ANl3hhSif4hBUYomFioBnqr3b2bX8xlIjpvjGfZUetH9ZVK2yKLRwDtmwGccNXuzJTXUY54CPDgsCJ%2FZQ6QP%2Be71oKXL%2FryRYjG1G6A6p0vULLhmtYCIzaRxY4BOk0LxNGeYjOtLQ3WIbOcuTpuPQLatOWWlBQ9yiKaJr3T3rEruaKYudgAMTPTtJcz18GIL0pWrPW7rSGnBw1cjxVb9Nco0YZLTXZPXE2JDBM6IZIFxeNksPFOsM%2BZCyolHegB1begEbJERq6vtbhPUYO2hAWeljBDulyvMAdpEk3%2BF8fS0KytYxT1vieDk2rdKUWuUnMIqXWoaMjW6vxXo%2Flvtw%2BnTWW3XQmy2CLMwD9yqk1S0LZ09r%2B6YzHsSrqHkv8%2Bh3O2q8Z75cZ9qh64E7Q6p%2FJR3VIYGynLC180S6EPyLWIzgmnKdBAhC0%2FH5Q%3D";
+        window.__genspark_locale = "en-US";
+        window.__genspark_token = "To/BnjzloZ3UfQdcSaYfDmImgIfwiUiR4J2/MV5IkZnB4r93Ny8SYHqB+qXuLhTh6j01g176QHWxSbEC1WKM3lk7kNRLGzvQx5bdHLmcBrAwYJNs5ANl3hhSif4hBUYomFioBnqr3b2bX8xlIjpvjGfZUetH9ZVK2yKLRwDtmwGccNXuzJTXUY54CPDgsCJ/ZQ6QP+e71oKXL/ryRYjG1G6A6p0vULLhmtYCIzaRxY4BOk0LxNGeYjOtLQ3WIbOcuTpuPQLatOWWlBQ9yiKaJr3T3rEruaKYudgAMTPTtJcz18GIL0pWrPW7rSGnBw1cjxVb9Nco0YZLTXZPXE2JDBM6IZIFxeNksPFOsM+ZCyolHegB1begEbJERq6vtbhPUYO2hAWeljBDulyvMAdpEk3+F8fS0KytYxT1vieDk2rdKUWuUnMIqXWoaMjW6vxXo/lvtw+nTWW3XQmy2CLMwD9yqk1S0LZ09r+6YzHsSrqHkv8+h3O2q8Z75cZ9qh64E7Q6p/JR3VIYGynLC180S6EPyLWIzgmnKdBAhC0/H5Q=";
+    </script>
+    
+    <script id="html_notice_dialog_script" src="https://www.genspark.ai/notice_dialog.js"></script>
+    
